@@ -1,0 +1,6 @@
+{
+  "name": "Goblin GLM Chatbot",
+  "description": "A cyberpunk-themed chatbot client for the Goblin Language Model hosted on Featherless AI, featuring Markdown rendering, reasoning display toggle, and photo upload support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
