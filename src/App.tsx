@@ -2,27 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { 
   Send, 
   Image as ImageIcon, 
+  Brain, 
   X, 
   Loader2,
-  Terminal,
-  LogIn,
-  LogOut,
-  Plus,
-  Trash2,
-  ChevronDown,
-  Volume2,
-  VolumeX,
-  Cpu
+  Terminal
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { 
-  onIdTokenChanged, 
-  signInWithPopup, 
-  signOut, 
-  User 
-} from "firebase/auth";
-import { auth, googleAuthProvider } from "./lib/firebase.ts";
-import GoblinAvatar from "./GoblinAvatar.tsx";
 
 interface ContentText {
   type: "text";
@@ -39,224 +24,31 @@ interface ContentImageUrl {
 type MessageContent = string | (ContentText | ContentImageUrl)[];
 
 interface Message {
-  id: string | number;
+  id: string;
   role: "user" | "assistant";
   content: MessageContent;
-  textContent: string;
-  imageUrl?: string;
-}
-
-interface ChatSession {
-  id: number;
-  title: string;
-  createdAt: string;
+  textContent: string; // Plaintext representation for rendering
+  reasoning?: string; // Parsed <think> blocks
+  finalAnswer?: string; // Parsed content outside <think>
+  imageUrl?: string; // Cached image url
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
-
-  const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
-  const [showSessionDropdown, setShowSessionDropdown] = useState(false);
-
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content: "GoBLiNMoDeGLM terminal initialized.",
+      textContent: "GoBLiNMoDeGLM terminal initialized.",
+      finalAnswer: "GoBLiNMoDeGLM terminal initialized.",
+    }
+  ]);
   const [inputValue, setInputValue] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [showAvatar, setShowAvatar] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // Monitor Auth State
-  useEffect(() => {
-    const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
-        setUser(firebaseUser);
-        const token = await firebaseUser.getIdToken();
-        setAuthToken(token);
-        // Sync user inside DB
-        try {
-          await fetch("/api/users/sync", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${token}`
-            }
-          });
-        } catch (err) {
-          console.error("Error syncing user profile:", err);
-        }
-      } else {
-        setUser(null);
-        setAuthToken(null);
-        setSessions([]);
-        setActiveSessionId(null);
-        setMessages([]);
-      }
-      setIsAuthLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // Fetch sessions when user becomes available
-  useEffect(() => {
-    if (user && authToken) {
-      fetchSessions();
-    }
-  }, [user, authToken]);
-
-  // Fetch messages when active session changes
-  useEffect(() => {
-    if (user && authToken && activeSessionId !== null) {
-      fetchMessages(activeSessionId);
-    }
-  }, [user, authToken, activeSessionId]);
-
-  const fetchSessions = async () => {
-    try {
-      const res = await fetch("/api/sessions", {
-        headers: {
-          "Authorization": `Bearer ${authToken}`
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSessions(data);
-        if (data.length > 0) {
-          // Default to the most recent session
-          setActiveSessionId(data[0].id);
-        } else {
-          // Automatically create a new default session if none exist
-          createNewSession("Initial Cave Session");
-        }
-      }
-    } catch (err) {
-      console.error("Error fetching sessions:", err);
-    }
-  };
-
-  const createNewSession = async (title?: string) => {
-    try {
-      const res = await fetch("/api/sessions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ title: title || `Cave Chat #${Date.now().toString().slice(-4)}` })
-      });
-      if (res.ok) {
-        const newSession = await res.json();
-        setSessions(prev => [newSession, ...prev]);
-        setActiveSessionId(newSession.id);
-        setShowSessionDropdown(false);
-      }
-    } catch (err) {
-      console.error("Error creating session:", err);
-    }
-  };
-
-  const deleteSession = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm("Are you sure you want to purge this session?")) return;
-    try {
-      const res = await fetch(`/api/sessions/${id}`, {
-        method: "DELETE",
-        headers: {
-          "Authorization": `Bearer ${authToken}`
-        }
-      });
-      if (res.ok) {
-        const updated = sessions.filter(s => s.id !== id);
-        setSessions(updated);
-        if (activeSessionId === id) {
-          if (updated.length > 0) {
-            setActiveSessionId(updated[0].id);
-          } else {
-            setActiveSessionId(null);
-            createNewSession();
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Error deleting session:", err);
-    }
-  };
-
-  const fetchMessages = async (sessionId: number) => {    try {
-      const res = await fetch(`/api/sessions/${sessionId}/messages`, {
-        headers: {
-          "Authorization": `Bearer ${authToken}`
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const formatted = data.map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          textContent: m.content,
-          imageUrl: m.imageUrl || undefined
-        }));
-        setMessages(formatted);
-      }
-    } catch (err) {
-      console.error("Error fetching messages:", err);
-    }
-  };
-
-  const speakText = async (text: string) => {
-    if (isMuted || !authToken || !text.trim()) return;
-    try {
-      const response = await fetch("/api/tts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${authToken}`
-        },
-        body: JSON.stringify({ text: text.slice(0, 600) })
-      });
-      if (!response.ok) return;
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      if (audioRef.current) {
-        audioRef.current.pause();
-        URL.revokeObjectURL(audioRef.current.src);
-      }
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onplay = () => setIsSpeaking(true);
-      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); };
-      audio.onerror = () => { setIsSpeaking(false); };
-      await audio.play();
-    } catch (err) {
-      setIsSpeaking(false);
-      console.error("TTS error:", err);
-    }
-  };
-
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleAuthProvider);
-    } catch (err) {
-      console.error("Login failed:", err);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (err) {
-      console.error("Logout failed:", err);
-    }
-  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -286,29 +78,37 @@ export default function App() {
 
   const parseReasoningAndAnswer = (rawText: string) => {
     let finalAnswer = rawText;
-    const thinkStart = rawText.indexOf("<think>");
-    if (thinkStart !== -1) {
-      const thinkEnd = rawText.indexOf("</think>", thinkStart + 7);
-      if (thinkEnd !== -1) {
-        finalAnswer = rawText.substring(0, thinkStart) + rawText.substring(thinkEnd + 8);
-      } else {
-        finalAnswer = rawText.substring(0, thinkStart);
-      }
+    let reasoning = "";
+
+    // 1. Extract and strip complete <think>...</think> blocks case-insensitively
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/gi;
+    finalAnswer = rawText.replace(thinkRegex, (match, content) => {
+      reasoning += content;
+      return "";
+    });
+
+    // 2. Handle an unclosed <think> block at the end of the text
+    const openThinkIdx = finalAnswer.toLowerCase().indexOf("<think>");
+    if (openThinkIdx !== -1) {
+      const unclosedReasoning = finalAnswer.substring(openThinkIdx + 7);
+      reasoning += unclosedReasoning;
+      finalAnswer = finalAnswer.substring(0, openThinkIdx);
     }
-    finalAnswer = finalAnswer.replace(/<\/?think>/gi, "").trim();
-    return { reasoning: "", finalAnswer: finalAnswer };
+
+    // 3. Strip any trailing partial tags to prevent "think artifacts" from flashing during streaming
+    // Only matches if it actually starts with < or </ followed by partial 'think' characters at the very end
+    finalAnswer = finalAnswer.replace(/<\/?(?:[tT](?:[hH](?:[iI](?:[nN](?:[kK]?>?)?)?)?)?)?$/g, "");
+
+    return { 
+      reasoning: reasoning.trim(), 
+      finalAnswer: finalAnswer
+    };
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputValue.trim() && !selectedImage) return;
-    if (isGenerating || activeSessionId === null || !authToken) return;
-
-    // Stop any playing audio when user sends a new message
-    if (audioRef.current) {
-      audioRef.current.pause();
-      setIsSpeaking(false);
-    }
+    if (isGenerating) return;
 
     const currentText = inputValue;
     const currentImg = selectedImage;
@@ -327,9 +127,9 @@ export default function App() {
       ];
     }
 
-    const tempUserMsgId = `user-temp-${Date.now()}`;
+    const userMsgId = `user-${Date.now()}`;
     const newUserMsg: Message = {
-      id: tempUserMsgId,
+      id: userMsgId,
       role: "user",
       content: contentPayload,
       textContent: currentText || "Uploaded Image",
@@ -340,12 +140,14 @@ export default function App() {
     setMessages(updatedMessages);
     setIsGenerating(true);
 
-    const tempAsstMsgId = `asst-temp-${Date.now()}`;
+    const assistantMsgId = `asst-${Date.now()}`;
     const initialAssistantMsg: Message = {
-      id: tempAsstMsgId,
+      id: assistantMsgId,
       role: "assistant",
       content: "",
-      textContent: ""
+      textContent: "",
+      finalAnswer: "",
+      reasoning: ""
     };
 
     setMessages(prev => [...prev, initialAssistantMsg]);
@@ -359,13 +161,9 @@ export default function App() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${authToken}`
+          "Content-Type": "application/json"
         },
-        body: JSON.stringify({ 
-          messages: apiMessages,
-          sessionId: activeSessionId
-        })
+        body: JSON.stringify({ messages: apiMessages })
       });
 
       if (!response.ok) {
@@ -380,15 +178,18 @@ export default function App() {
 
       const decoder = new TextDecoder();
       let fullText = "";
-      let finalAnswerText = "";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
         
+        const chunk = decoder.decode(value || new Uint8Array(), { stream: !done });
+        buffer += chunk;
+
+        const lines = buffer.split("\n");
+        // Keep the last part of the split (the potentially incomplete line) in the buffer
+        buffer = lines.pop() || "";
+
         for (const line of lines) {
           const cleanLine = line.trim();
           if (!cleanLine) continue;
@@ -403,16 +204,17 @@ export default function App() {
               if (textDelta) {
                 fullText += textDelta;
 
-                const { finalAnswer } = parseReasoningAndAnswer(fullText);
-                finalAnswerText = finalAnswer;
+                const { reasoning, finalAnswer } = parseReasoningAndAnswer(fullText);
 
                 setMessages(prev => {
                   return prev.map(m => {
-                    if (m.id === tempAsstMsgId) {
+                    if (m.id === assistantMsgId) {
                       return {
                         ...m,
                         content: fullText,
-                        textContent: finalAnswer
+                        textContent: fullText,
+                        reasoning: reasoning,
+                        finalAnswer: finalAnswer
                       };
                     }
                     return m;
@@ -424,22 +226,52 @@ export default function App() {
             }
           }
         }
+
+        if (done) {
+          // Process any final text remaining in the buffer if applicable
+          if (buffer.trim()) {
+            const cleanLine = buffer.trim();
+            if (cleanLine.startsWith("data: ")) {
+              const dataStr = cleanLine.substring(6);
+              if (dataStr !== "[DONE]") {
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  const textDelta = parsed.choices?.[0]?.delta?.content;
+                  if (textDelta) {
+                    fullText += textDelta;
+                    const { reasoning, finalAnswer } = parseReasoningAndAnswer(fullText);
+                    setMessages(prev => {
+                      return prev.map(m => {
+                        if (m.id === assistantMsgId) {
+                          return {
+                            ...m,
+                            content: fullText,
+                            textContent: fullText,
+                            reasoning: reasoning,
+                            finalAnswer: finalAnswer
+                          };
+                        }
+                        return m;
+                      });
+                    });
+                  }
+                } catch (e) {}
+              }
+            }
+          }
+          break;
+        }
       }
-
-      // Reload fresh messages from database to assign real IDs
-      fetchMessages(activeSessionId);
-
-      // Speak the assistant's reply
-      if (finalAnswerText) speakText(finalAnswerText);
 
     } catch (error: any) {
       console.error("Transmit error:", error);
       setMessages(prev => {
         return prev.map(m => {
-          if (m.id === tempAsstMsgId) {
+          if (m.id === assistantMsgId) {
             return {
               ...m,
-              textContent: `⚠️ **Transmission Error.**\n\n*${error.message || "An error occurred."}*`
+              finalAnswer: `⚠️ **Transmission Error.**\n\n*${error.message || "An error occurred."}*`,
+              reasoning: "CONNECTION_FAILED"
             };
           }
           return m;
@@ -450,238 +282,127 @@ export default function App() {
     }
   };
 
-  const activeSessionTitle = sessions.find(s => s.id === activeSessionId)?.title || "Select Session";
-
-  // Loading Screen
-  if (isAuthLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen w-full bg-[#020205] text-[#22c55e] font-mono">
-        <Loader2 className="w-8 h-8 animate-spin mb-3 text-green-500" />
-        <span className="text-xs tracking-widest animate-pulse">BOOTING GOB_LIN LINK...</span>
-      </div>
-    );
-  }
-
-  // Login Screen (Unauthenticated State)
-  if (!user) {
-    return (
-      <div className="flex flex-col h-screen w-full bg-[#020205] text-[#22c55e] font-mono overflow-hidden justify-center items-center px-4 relative">
-        {/* Abstract cyber backdrop elements */}
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(34,197,94,0.06),transparent_70%)] pointer-events-none" />
-        
-        <div className="w-full max-w-md border-2 border-green-500 bg-black p-6 md:p-8 rounded shadow-[0_0_35px_rgba(34,197,94,0.15)] relative z-10">
-          <div className="flex justify-center mb-6 text-green-500">
-            <Terminal className="w-12 h-12 animate-pulse" />
-          </div>
-          
-          <h1 className="text-xl md:text-2xl font-black text-center tracking-widest uppercase text-white mb-2">
-            GOB_LIN TERMINAL <span className="text-green-500">GLM</span>
-          </h1>
-          <p className="text-xs text-center text-green-600 font-bold mb-8 uppercase tracking-wider">
-            Cave Network Security Layer Active
-          </p>
-
-          <div className="space-y-4 mb-8">
-            <div className="bg-green-950/20 border border-green-500/30 p-4 rounded text-[11px] leading-relaxed text-green-300">
-              <span className="text-green-400 font-bold uppercase block mb-1">COGNITIVE SYNC LOG:</span>
-              - Secure Cloud SQL database initialized in us-east1
-              <br />
-              - Real-time persistent state mapping active
-              <br />
-              - Identification check required for deep link
-            </div>
-          </div>
-
-          <button
-            onClick={handleLogin}
-            className="w-full h-12 border-2 border-green-500 bg-green-500 hover:bg-green-400 text-black font-black text-xs uppercase flex items-center justify-center gap-2.5 transition-all shadow-[0_0_15px_rgba(34,197,94,0.25)] hover:shadow-[0_0_25px_rgba(34,197,94,0.4)] active:scale-95 cursor-pointer rounded"
-          >
-            <LogIn className="w-4 h-4 shrink-0" />
-            <span>ESTABLISH COGNITIVE LINK</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Chat Screen (Authenticated State)
   return (
     <div className="flex flex-col h-screen w-full bg-[#020205] text-[#22c55e] font-mono overflow-hidden">
       
       {/* High-Contrast Cyberpunk Header */}
-      <header className="shrink-0 border-b-2 border-green-500 bg-black px-4 py-3 flex items-center justify-between shadow-[0_2px_15px_rgba(34,197,94,0.15)] relative z-40">
+      <header className="shrink-0 border-b-2 border-green-500 bg-black px-4 py-3 flex items-center justify-between shadow-[0_2px_15px_rgba(34,197,94,0.15)]">
         <div className="flex items-center gap-2.5">
           <Terminal className="w-5 h-5 text-green-500" />
-          <h1 className="text-sm md:text-base font-black tracking-widest uppercase text-white hidden sm:block">
+          <h1 className="text-sm md:text-base font-black tracking-widest uppercase text-white">
             GOB_LIN TERMINAL <span className="text-green-500">GLM</span>
           </h1>
         </div>
-
-        {/* Dynamic DB Sessions Controller */}
-        <div className="flex items-center gap-2 flex-1 sm:flex-none justify-end">          <div className="relative">
-            <button
-              onClick={() => setShowSessionDropdown(!showSessionDropdown)}
-              className="h-9 px-3 bg-black border-2 border-green-500 text-xs font-bold text-green-400 hover:bg-green-950/30 flex items-center gap-1.5 rounded cursor-pointer max-w-[160px] truncate"
-            >
-              <span className="truncate">{activeSessionTitle}</span>
-              <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showSessionDropdown ? "rotate-180" : ""}`} />
-            </button>
-
-            {showSessionDropdown && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowSessionDropdown(false)} />
-                <div className="absolute right-0 mt-2 w-56 border-2 border-green-500 bg-black shadow-[0_10px_25px_rgba(0,0,0,0.9)] rounded z-50 overflow-hidden">
-                  <div className="p-2 border-b border-green-900 flex justify-between items-center bg-green-950/15">
-                    <span className="text-[10px] text-green-600 font-bold uppercase tracking-widest">SAVED SESSIONS</span>
-                    <button
-                      onClick={() => createNewSession()}
-                      className="p-1 border border-green-500 hover:bg-green-500 hover:text-black rounded text-green-400 cursor-pointer"
-                      title="New Session"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto divide-y divide-green-900/40">
-                    {sessions.map(s => (
-                      <div
-                        key={s.id}
-                        onClick={() => {
-                          setActiveSessionId(s.id);
-                          setShowSessionDropdown(false);
-                        }}
-                        className={`p-2.5 text-xs flex justify-between items-center cursor-pointer hover:bg-green-950/20 ${activeSessionId === s.id ? "text-white bg-green-950/40 font-bold" : "text-green-400"}`}
-                      >
-                        <span className="truncate flex-1 pr-2">{s.title}</span>
-                        <button
-                          onClick={(e) => deleteSession(s.id, e)}
-                          className="p-1 text-red-500 hover:bg-red-950/40 rounded transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-
-          <button
-            onClick={() => setIsMuted(m => !m)}
-            className={`h-9 w-9 border-2 bg-black flex items-center justify-center rounded cursor-pointer transition-colors ${isMuted ? "border-yellow-500 text-yellow-500 hover:bg-yellow-950/20" : "border-green-500 text-green-500 hover:bg-green-950/20"}`}
-            title={isMuted ? "Unmute goblin" : "Mute goblin"}
-          >
-            {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-          </button>
-
-          <button
-            onClick={() => setShowAvatar(v => !v)}
-            className={`h-9 w-9 border-2 bg-black flex items-center justify-center rounded cursor-pointer transition-colors ${showAvatar ? "border-green-500 text-green-500 hover:bg-green-950/20" : "border-green-900 text-green-800 hover:bg-green-950/10"}`}
-            title={showAvatar ? "Hide avatar" : "Show avatar"}
-          >
-            <Cpu className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            onClick={handleLogout}
-            className="h-9 px-2.5 border-2 border-red-500 bg-black hover:bg-red-950/20 text-red-500 text-xs font-bold uppercase flex items-center justify-center gap-1.5 transition-colors cursor-pointer rounded"
-            title="Log out"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">DISCONNECT</span>
-          </button>
-        </div>
       </header>
-
-      {/* Cyber Goblin Avatar Panel */}
-      {showAvatar && (
-        <div className="shrink-0 border-b-2 border-green-500">
-          <GoblinAvatar isSpeaking={isSpeaking} isThinking={isGenerating} />
-        </div>
-      )}
 
       {/* Main chat view space - scrollable list */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 pb-32">
         <div className="max-w-3xl mx-auto space-y-6">
-          
-          {messages.length === 0 ? (
-            <div className="text-center py-12 border-2 border-dashed border-green-900/60 rounded bg-green-950/5">
-              <p className="text-xs text-green-600 uppercase font-black tracking-widest mb-1">COGNITIVE SYNC SECURED</p>
-              <p className="text-[11px] text-green-700 font-bold">PostgreSQL message logs are empty inside this session.</p>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div 
-                key={message.id} 
-                className={`flex gap-3.5 ${
-                  message.role === "user" ? "justify-end" : "justify-start"
-                }`}
-              >
-                {message.role === "assistant" && (
-                  <div className="w-7 h-7 shrink-0 rounded border-2 border-green-500 bg-black text-green-500 font-bold text-[10px] flex items-center justify-center tracking-tighter select-none shadow-[0_0_8px_rgba(34,197,94,0.2)]">
-                    GLM
+          {messages.map((message) => (
+            <div 
+              key={message.id} 
+              className={`flex gap-3.5 ${
+                message.role === "user" ? "justify-end" : "justify-start"
+              }`}
+            >
+              {message.role === "assistant" && (
+                <div className="w-7 h-7 shrink-0 rounded border-2 border-green-500 bg-black text-green-500 font-bold text-[10px] flex items-center justify-center tracking-tighter select-none shadow-[0_0_8px_rgba(34,197,94,0.2)]">
+                  GLM
+                </div>
+              )}
+
+              <div className={`max-w-[85%] flex flex-col gap-1.5 ${message.role === "user" ? "items-end" : "items-start"}`}>
+                
+                {/* Visual file rendering preview */}
+                {message.imageUrl && (
+                  <div className="mb-1 max-w-sm overflow-hidden rounded border-2 border-green-500 bg-black shadow-[0_0_15px_rgba(34,197,94,0.1)]">
+                    <img 
+                      src={message.imageUrl} 
+                      alt="Local capture payload" 
+                      className="max-h-52 w-full object-contain p-1"
+                    />
                   </div>
                 )}
 
-                <div className={`max-w-[85%] flex flex-col gap-1.5 ${message.role === "user" ? "items-end" : "items-start"}`}>
-                  
-                  {/* Visual file rendering preview */}
-                  {message.imageUrl && (
-                    <div className="mb-1 max-w-sm overflow-hidden rounded border-2 border-green-500 bg-black shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-                      <img 
-                        src={message.imageUrl} 
-                        alt="Local capture payload" 
-                        referrerPolicy="no-referrer"
-                        className="max-h-52 w-full object-contain p-1"
-                      />
-                    </div>
-                  )}
 
-                  {/* Main bubble box with markdown support */}
-                  <div className={`p-4 rounded border-2 ${
-                    message.role === "user" 
-                      ? "bg-green-950/25 border-green-500 text-green-100 shadow-[0_0_10px_rgba(34,197,94,0.05)]" 
-                      : "bg-black border-green-500/60 text-green-200"
-                  }`}>
-                    <div className="prose prose-invert max-w-none text-sm leading-relaxed overflow-x-auto">
-                      {message.role === "user" ? (
-                        <p className="whitespace-pre-wrap font-sans">{message.textContent}</p>
-                      ) : (
-                        <ReactMarkdown
-                          components={{
-                            p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed font-sans">{children}</p>,
-                            h1: ({ children }) => <h1 className="text-base font-bold text-green-400 mt-3 mb-2 uppercase font-mono border-b border-green-500/30 pb-0.5">{children}</h1>,
-                            h2: ({ children }) => <h2 className="text-sm font-bold text-green-400 mt-3 mb-2 uppercase font-mono">{children}</h2>,
-                            h3: ({ children }) => <h3 className="text-xs font-bold text-green-400 mt-2 mb-1 font-mono">{children}</h3>,
-                            code: ({ className, children }) => {
-                              return (
-                                <code className="bg-black border border-green-500/40 text-[#a3e635] px-2 py-1 rounded font-mono text-xs block my-2 overflow-x-auto whitespace-pre leading-relaxed select-all">
-                                  {children}
-                                </code>
-                              );
-                            },
-                            ol: ({ children }) => <ol className="list-decimal list-inside pl-3 mb-3 space-y-1 font-sans">{children}</ol>,
-                            ul: ({ children }) => <ul className="list-disc list-inside pl-3 mb-3 space-y-1 font-sans">{children}</ul>,
-                            li: ({ children }) => <li className="font-sans">{children}</li>,
-                            strong: ({ children }) => <strong className="text-green-100 font-bold font-mono uppercase tracking-wider">{children}</strong>,
-                            blockquote: ({ children }) => <blockquote className="border-l-2 border-green-500 pl-3 my-2 italic opacity-90 font-sans">{children}</blockquote>,
-                          }}
-                        >
-                          {message.textContent}
-                        </ReactMarkdown>
-                      )}
-                    </div>
+
+                {/* Main bubble box with markdown support */}
+                <div className={`p-4 rounded border-2 ${
+                  message.role === "user" 
+                    ? "bg-green-950/25 border-green-500 text-green-100 shadow-[0_0_10px_rgba(34,197,94,0.05)]" 
+                    : "bg-black border-green-500/60 text-green-200"
+                }`}>
+                  <div className="prose prose-invert max-w-none text-sm leading-relaxed overflow-x-auto">
+                    {message.role === "user" ? (
+                      <p className="whitespace-pre-wrap font-sans">{message.textContent}</p>
+                    ) : (
+                      (() => {
+                        const hasUnclosedThink = message.textContent.toLowerCase().includes("<think>") && !message.textContent.toLowerCase().includes("</think>");
+                        const hasThink = message.textContent.toLowerCase().includes("<think>");
+                        const reasoningText = message.reasoning || "";
+                        const answerText = message.finalAnswer !== undefined ? message.finalAnswer : message.textContent;
+
+                        return (
+                          <div className="space-y-4">
+                            {/* 1. Reasoning Block */}
+                            {(hasThink || reasoningText.trim() !== "") && (
+                              <div className="border-l-2 border-green-500/30 pl-3 py-1 my-1 bg-green-950/10 rounded-r">
+                                <div className="text-[10px] text-green-500/50 uppercase tracking-widest font-bold flex items-center gap-1.5 mb-1 select-none">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-green-500/50 animate-pulse"></span>
+                                  {hasUnclosedThink ? "Thought Process (Active)" : "Thought Process (Complete)"}
+                                </div>
+                                <div className="text-xs text-green-500/70 italic whitespace-pre-wrap font-sans leading-relaxed">
+                                  {reasoningText || (hasUnclosedThink ? "Analyzing prompt..." : "")}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 2. Final Answer Block */}
+                            {answerText && answerText.trim() !== "" ? (
+                              <ReactMarkdown
+                                components={{
+                                  p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed font-sans">{children}</p>,
+                                  h1: ({ children }) => <h1 className="text-base font-bold text-green-400 mt-3 mb-2 uppercase font-mono border-b border-green-500/30 pb-0.5">{children}</h1>,
+                                  h2: ({ children }) => <h2 className="text-sm font-bold text-green-400 mt-3 mb-2 uppercase font-mono">{children}</h2>,
+                                  h3: ({ children }) => <h3 className="text-xs font-bold text-green-400 mt-2 mb-1 font-mono">{children}</h3>,
+                                  code: ({ className, children }) => {
+                                    return (
+                                      <code className="bg-black border border-green-500/40 text-[#a3e635] px-2 py-1 rounded font-mono text-xs block my-2 overflow-x-auto whitespace-pre leading-relaxed select-all">
+                                        {children}
+                                      </code>
+                                    );
+                                  },
+                                  ol: ({ children }) => <ol className="list-decimal list-inside pl-3 mb-3 space-y-1 font-sans">{children}</ol>,
+                                  ul: ({ children }) => <ul className="list-disc list-inside pl-3 mb-3 space-y-1 font-sans">{children}</ul>,
+                                  li: ({ children }) => <li className="font-sans">{children}</li>,
+                                  strong: ({ children }) => <strong className="text-green-100 font-bold font-mono uppercase tracking-wider">{children}</strong>,
+                                  blockquote: ({ children }) => <blockquote className="border-l-2 border-green-500 pl-3 my-2 italic opacity-90 font-sans">{children}</blockquote>,
+                                }}
+                              >
+                                {answerText}
+                              </ReactMarkdown>
+                            ) : (
+                              !hasUnclosedThink && (
+                                <div className="text-xs text-green-500/40 animate-pulse select-none font-mono">
+                                  [PREPARING RESPONSE...]
+                                </div>
+                              )
+                            )}
+                          </div>
+                        );
+                      })()
+                    )}
                   </div>
                 </div>
-
-                {message.role === "user" && (
-                  <div className="w-7 h-7 shrink-0 rounded border-2 border-green-500 bg-black text-green-500 font-bold text-[10px] flex items-center justify-center tracking-tighter select-none shadow-[0_0_8px_rgba(34,197,94,0.2)]">
-                    USR
-                  </div>
-                )}
               </div>
-            ))
-          )}
+
+              {message.role === "user" && (
+                <div className="w-7 h-7 shrink-0 rounded border-2 border-green-500 bg-black text-green-500 font-bold text-[10px] flex items-center justify-center tracking-tighter select-none shadow-[0_0_8px_rgba(34,197,94,0.2)]">
+                  USR
+                </div>
+              )}
+            </div>
+          ))}
 
           {isGenerating && (
             <div className="flex gap-3 justify-start items-center">
@@ -698,15 +419,16 @@ export default function App() {
         </div>
       </div>
 
-      {/* FIXED BOTTOM FOOTER */}
+      {/* FIXED BOTTOM FOOTER: This guarantees that the input is always correctly aligned to the visible screen area in any mobile viewport */}
       <footer className="fixed bottom-0 left-0 right-0 p-4 border-t-2 border-green-500 bg-black z-30 shadow-[0_-5px_20px_rgba(0,0,0,0.8)]">
         <div className="max-w-3xl mx-auto">
           
+          {/* File Upload image preview */}
           {selectedImage && (
             <div className="bg-green-950/20 border-2 border-green-500 rounded p-2 mb-3 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 bg-black border border-green-500 rounded overflow-hidden p-0.5 flex justify-center items-center">
-                  <img src={selectedImage} alt="Local snapshot payload" referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                  <img src={selectedImage} alt="Local snapshot payload" className="w-full h-full object-cover" />
                 </div>
                 <div>
                   <span className="text-xs text-green-400 block font-bold font-mono uppercase tracking-wider">IMAGE CAPTURED</span>
@@ -723,6 +445,7 @@ export default function App() {
           )}
 
           <form onSubmit={handleSendMessage} className="flex gap-2.5">
+            {/* Native file trigger button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -745,14 +468,14 @@ export default function App() {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type a message..."
-              disabled={isGenerating || activeSessionId === null}
+              disabled={isGenerating}
               className="flex-1 h-12 px-4 bg-black border-2 border-green-500 text-green-400 text-sm font-mono placeholder-green-800/80 focus:outline-none focus:border-green-300 rounded disabled:opacity-55"
               autoFocus
             />
 
             <button
               type="submit"
-              disabled={isGenerating || activeSessionId === null || (!inputValue.trim() && !selectedImage)}
+              disabled={isGenerating || (!inputValue.trim() && !selectedImage)}
               className="px-6 h-12 border-2 border-green-500 bg-green-500 text-black font-bold text-xs uppercase flex items-center justify-center gap-1.5 hover:bg-green-400 transition-all active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none rounded cursor-pointer shadow-[0_0_15px_rgba(34,197,94,0.2)]"
             >
               <span>SEND</span>
