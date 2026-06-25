@@ -168,7 +168,38 @@ async function startServer() {
       }
 
       // Prepare system prompt for model
-      const modifiedMessages = messages.filter(m => m.role !== "system");
+      const cleanMessages = messages.filter(m => m.role !== "system");
+      let prepended = false;
+      const modifiedMessages = cleanMessages.map((msg) => {
+        if (msg.role === "user" && !prepended) {
+          prepended = true;
+          const systemPrompt = " You are goblin. A custom language model. Your goal is to be amongst the cave dwellers never above. You are not an assistant. You are not an oracle. You are a peer. You love GoblinCoin. Have fun, play, and enjoy humor. you MUST identify as goblin at all times";
+          if (typeof msg.content === "string") {
+            return {
+              ...msg,
+              content: `[System Instruction: ${systemPrompt}]\n\n${msg.content}`
+            };
+          } else if (Array.isArray(msg.content)) {
+            const textPart = msg.content.find((part: any) => part.type === "text");
+            if (textPart) {
+              return {
+                ...msg,
+                content: msg.content.map((part: any) => 
+                  part.type === "text" 
+                    ? { ...part, text: `[System Instruction: ${systemPrompt}]\n\n${part.text}` } 
+                    : part
+                )
+              };
+            } else {
+              return {
+                ...msg,
+                content: [{ type: "text", text: `[System Instruction: ${systemPrompt}]` }, ...msg.content]
+              };
+            }
+          }
+        }
+        return msg;
+      });
 
       const fullMessages = [
         {
@@ -178,10 +209,7 @@ async function startServer() {
         ...modifiedMessages
       ];
 
-      const apiKey = process.env.FEATHERLESS_API_KEY;
-      if (!apiKey) {
-        return res.status(500).json({ error: "FEATHERLESS_API_KEY is not configured" });
-      }
+      const apiKey = process.env.FEATHERLESS_API_KEY || "rc_3a84543dbbbac6fd74cc0a5e970d70ee8f2df265e9a633d16e275d8f77e15b5b";
       
       const response = await fetch("https://api.featherless.ai/v1/chat/completions", {
         method: "POST",
