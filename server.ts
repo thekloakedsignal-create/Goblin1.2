@@ -122,6 +122,43 @@ async function startServer() {
     }
   });
 
+  // TTS proxy — Lemonfox Santa voice
+  app.post("/api/tts", requireAuth, async (req: AuthRequest, res: express.Response) => {
+    const { text } = req.body;
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ error: "text is required" });
+    }
+    const apiKey = process.env.LEMONFOX_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: "TTS not configured" });
+    }
+    try {
+      const ttsResponse = await fetch("https://api.lemonfox.ai/v1/audio/speech", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "tts-1",
+          voice: "santa",
+          input: text.slice(0, 1000)
+        })
+      });
+      if (!ttsResponse.ok) {
+        const errText = await ttsResponse.text();
+        console.error("Lemonfox TTS error:", errText);
+        return res.status(ttsResponse.status).json({ error: errText });
+      }
+      res.setHeader("Content-Type", ttsResponse.headers.get("Content-Type") || "audio/mpeg");
+      const buf = await ttsResponse.arrayBuffer();
+      res.send(Buffer.from(buf));
+    } catch (err: any) {
+      console.error("TTS proxy error:", err);
+      if (!res.headersSent) res.status(500).json({ error: err?.message || "TTS failed" });
+    }
+  });
+
   // Main secured chat route
   app.post("/api/chat", requireAuth, async (req: AuthRequest, res: express.Response) => {
     const { messages, sessionId } = req.body;

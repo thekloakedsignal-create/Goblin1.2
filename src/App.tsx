@@ -9,7 +9,10 @@ import {
   LogOut,
   Plus,
   Trash2,
-  ChevronDown
+  ChevronDown,
+  Volume2,
+  VolumeX,
+  Cpu
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { 
@@ -19,6 +22,7 @@ import {
   User 
 } from "firebase/auth";
 import { auth, googleAuthProvider } from "./lib/firebase.ts";
+import GoblinAvatar from "./GoblinAvatar.tsx";
 
 interface ContentText {
   type: "text";
@@ -61,9 +65,13 @@ export default function App() {
   const [inputValue, setInputValue] = useState("");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [showAvatar, setShowAvatar] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Monitor Auth State
   useEffect(() => {
@@ -182,8 +190,7 @@ export default function App() {
     }
   };
 
-  const fetchMessages = async (sessionId: number) => {
-    try {
+  const fetchMessages = async (sessionId: number) => {    try {
       const res = await fetch(`/api/sessions/${sessionId}/messages`, {
         headers: {
           "Authorization": `Bearer ${authToken}`
@@ -202,6 +209,36 @@ export default function App() {
       }
     } catch (err) {
       console.error("Error fetching messages:", err);
+    }
+  };
+
+  const speakText = async (text: string) => {
+    if (isMuted || !authToken || !text.trim()) return;
+    try {
+      const response = await fetch("/api/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ text: text.slice(0, 600) })
+      });
+      if (!response.ok) return;
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onplay = () => setIsSpeaking(true);
+      audio.onended = () => { setIsSpeaking(false); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setIsSpeaking(false); };
+      await audio.play();
+    } catch (err) {
+      setIsSpeaking(false);
+      console.error("TTS error:", err);
     }
   };
 
@@ -266,6 +303,12 @@ export default function App() {
     if (e) e.preventDefault();
     if (!inputValue.trim() && !selectedImage) return;
     if (isGenerating || activeSessionId === null || !authToken) return;
+
+    // Stop any playing audio when user sends a new message
+    if (audioRef.current) {
+      audioRef.current.pause();
+      setIsSpeaking(false);
+    }
 
     const currentText = inputValue;
     const currentImg = selectedImage;
@@ -337,6 +380,7 @@ export default function App() {
 
       const decoder = new TextDecoder();
       let fullText = "";
+      let finalAnswerText = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -360,6 +404,7 @@ export default function App() {
                 fullText += textDelta;
 
                 const { finalAnswer } = parseReasoningAndAnswer(fullText);
+                finalAnswerText = finalAnswer;
 
                 setMessages(prev => {
                   return prev.map(m => {
@@ -383,6 +428,9 @@ export default function App() {
 
       // Reload fresh messages from database to assign real IDs
       fetchMessages(activeSessionId);
+
+      // Speak the assistant's reply
+      if (finalAnswerText) speakText(finalAnswerText);
 
     } catch (error: any) {
       console.error("Transmit error:", error);
@@ -470,8 +518,7 @@ export default function App() {
         </div>
 
         {/* Dynamic DB Sessions Controller */}
-        <div className="flex items-center gap-2 flex-1 sm:flex-none justify-end">
-          <div className="relative">
+        <div className="flex items-center gap-2 flex-1 sm:flex-none justify-end">          <div className="relative">
             <button
               onClick={() => setShowSessionDropdown(!showSessionDropdown)}
               className="h-9 px-3 bg-black border-2 border-green-500 text-xs font-bold text-green-400 hover:bg-green-950/30 flex items-center gap-1.5 rounded cursor-pointer max-w-[160px] truncate"
@@ -520,6 +567,22 @@ export default function App() {
           </div>
 
           <button
+            onClick={() => setIsMuted(m => !m)}
+            className={`h-9 w-9 border-2 bg-black flex items-center justify-center rounded cursor-pointer transition-colors ${isMuted ? "border-yellow-500 text-yellow-500 hover:bg-yellow-950/20" : "border-green-500 text-green-500 hover:bg-green-950/20"}`}
+            title={isMuted ? "Unmute goblin" : "Mute goblin"}
+          >
+            {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            onClick={() => setShowAvatar(v => !v)}
+            className={`h-9 w-9 border-2 bg-black flex items-center justify-center rounded cursor-pointer transition-colors ${showAvatar ? "border-green-500 text-green-500 hover:bg-green-950/20" : "border-green-900 text-green-800 hover:bg-green-950/10"}`}
+            title={showAvatar ? "Hide avatar" : "Show avatar"}
+          >
+            <Cpu className="w-3.5 h-3.5" />
+          </button>
+
+          <button
             onClick={handleLogout}
             className="h-9 px-2.5 border-2 border-red-500 bg-black hover:bg-red-950/20 text-red-500 text-xs font-bold uppercase flex items-center justify-center gap-1.5 transition-colors cursor-pointer rounded"
             title="Log out"
@@ -529,6 +592,13 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Cyber Goblin Avatar Panel */}
+      {showAvatar && (
+        <div className="shrink-0 border-b-2 border-green-500">
+          <GoblinAvatar isSpeaking={isSpeaking} isThinking={isGenerating} />
+        </div>
+      )}
 
       {/* Main chat view space - scrollable list */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 pb-32">
